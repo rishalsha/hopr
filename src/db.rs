@@ -85,13 +85,65 @@ impl Database {
         Ok(())
     }
 
+    fn get_or_insert_record(&mut self, path: PathBuf, now: Epoch) -> Result<&Record> {
+        let existing_idx = self.records.iter().position(|r| r.path == path);
+        let idx = match existing_idx {
+            Some(i) => {
+                self.records[i].score *= 2.0;
+                self.records[i].last_accessed = now;
+                i
+            }
+            None => {
+                let mut rec = Record::new(path);
+                rec.last_accessed = now;
+                self.records.push(rec);
+                self.records.len() - 1
+            }
+        };
+        self.save().context("while attempting to save database after record update")?;
+        Ok(&self.records[idx])
+    }
+
     pub fn query(&mut self, keywords: &[impl AsRef<str>]) -> Result<&Record> {
         let now = utils::current_time().context("while attempting to get current time")?;
+
+        // 1. Prioritize direct relative/absolute path match on disk
+        let path_slash = keywords.iter().map(|k| k.as_ref()).collect::<Vec<_>>().join("/");
+        let path_space = keywords.iter().map(|k| k.as_ref()).collect::<Vec<_>>().join(" ");
+
+        let direct_path = canonicalize(&path_slash)
+            .ok()
+            .or_else(|| canonicalize(&path_space).ok())
+            .or_else(|| {
+                if keywords.len() == 1 {
+                    canonicalize(keywords[0].as_ref()).ok()
+                } else {
+                    None
+                }
+            })
+            .filter(|p| p.is_file());
+
+        if let Some(canon_path) = direct_path {
+            return self.get_or_insert_record(canon_path, now);
+        }
+
+        // 2. Prioritize matching file in the current working directory or its subdirectories
+        if let Ok(cwd) = utils::current_dir() {
+            if let Some(local_path) = utils::find_file_in_dir(&cwd, keywords) {
+                if let Ok(canon_local) = canonicalize(local_path) {
+                    if canon_local.is_file() {
+                        return self.get_or_insert_record(canon_local, now);
+                    }
+                }
+            }
+        }
+
+        // 3. Fallback to global history records by frecency score (ignoring binary files)
         let best_idx = self
             .records
             .iter()
             .enumerate()
-            .filter(|(_, record)| utils::matches_keywords(&record.path, keywords))
+            .filter(|(_, record)| !utils::is_binary_file(&record.path) && utils::matches_keywords(&record.path, keywords))
             .max_by(|(_, a), (_, b)| a.score(now).total_cmp(&b.score(now)))
             .map(|(idx, _)| idx);
 
@@ -101,17 +153,6 @@ impl Database {
             self.save().context("while attempting to save database after query update")?;
             Ok(&self.records[idx])
         } else {
-            // If single keyword and points to a file on disk, add it to database history
-            if keywords.len() == 1 {
-                if let Ok(canon_path) = canonicalize(keywords[0].as_ref()) {
-                    let rec = Record::new(canon_path);
-                    self.records.push(rec);
-                    let last_idx = self.records.len() - 1;
-                    self.records[last_idx].last_accessed = now;
-                    self.save().context("while attempting to save database after adding path")?;
-                }
-            }
-
             Err(anyhow!("Did not find record matching query"))
         }
     }
@@ -169,14 +210,40 @@ mod tests {
 
     #[test]
     fn test_db_query_no_match() {
-        let mut db = Database::new(PathBuf::from("/tmp/dummy_db"));
+        let mut db = Database::new(PathBuf::from("/tmp/dummy_db_nomatch"));
         db.records.push(Record {
             path: PathBuf::from("/home/user/.config/nvim/init.lua"),
             score: 1.0,
             last_accessed: 100,
         });
 
-        assert!(db.query(&["nonexistent", "path"]).is_err());
+        assert!(db.query(&["nonexistent_xyz_123", "path"]).is_err());
+    }
+
+    #[test]
+    fn test_db_query_fallback_file_on_disk() {
+        let mut db = Database::new(PathBuf::from("/tmp/dummy_db_fallback"));
+        // DB starts empty, but "src/main.rs" exists on disk
+        let matched = db.query(&["src", "main.rs"]).expect("should locate src/main.rs on disk");
+        assert!(matched.path.to_string_lossy().contains("src/main.rs"));
+        assert_eq!(db.records.len(), 1);
+    }
+
+    #[test]
+    fn test_db_query_prioritizes_cwd_file_over_history() {
+        let mut db = Database::new(PathBuf::from("/tmp/dummy_db_cwd_prio"));
+        // History contains a main.rs from another directory with high score
+        db.records.push(Record {
+            path: PathBuf::from("/other/path/src/main.rs"),
+            score: 1000.0,
+            last_accessed: 100,
+        });
+
+        // Querying ["src", "main.rs"] from current repo should match current repo's src/main.rs
+        let matched = db.query(&["src", "main.rs"]).expect("should locate current dir src/main.rs");
+        assert!(matched.path.to_string_lossy().contains("hopr/src/main.rs"));
     }
 }
+
+
 

@@ -40,14 +40,16 @@ fn main() -> Result<()> {
     let selected = database.query(&args.keywords);
 
     let (to_open, dir) = match selected {
-        Ok(v) => (v.path.to_string_lossy().to_string(), v.path.parent()),
-        Err(err) => {
-            eprintln!("Error matching route: {}", err);
-            std::process::exit(1);
+        Ok(v) => (v.path.to_string_lossy().to_string(), v.path.parent().map(|p| p.to_path_buf())),
+        Err(_) => {
+            let combined = args.keywords.join("/");
+            let path = std::path::PathBuf::from(&combined);
+            let parent = path.parent().map(|p| p.to_path_buf());
+            (combined, parent)
         }
     };
 
-    open_in_nvim_unix(to_open, dir);
+    open_in_nvim_unix(to_open, dir.as_deref());
     Ok(())
 }
 

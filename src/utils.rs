@@ -288,6 +288,132 @@ pub fn matches_keywords(path: &Path, keywords: &[impl AsRef<str>]) -> bool {
     true
 }
 
+const IGNORED_DIRS: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    ".pnpm",
+    ".ignored",
+    ".next",
+    ".nuxt",
+    ".cache",
+    "target",
+    "dist",
+    "build",
+    "vendor",
+    "tmp",
+];
+
+const BINARY_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "ico", "bmp", "tiff", "webp", "pdf", "zip", "tar", "gz", "7z",
+    "bz2", "xz", "rar", "exe", "dll", "so", "dylib", "a", "o", "pyc", "wasm", "db", "sqlite",
+    "bin", "dat", "ds_store",
+];
+
+/// Returns true if `path` has a known binary file extension or binary metadata filename.
+pub fn is_binary_file(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let ext_lower = to_lowercase(ext);
+        if BINARY_EXTENSIONS.contains(&ext_lower.as_str()) {
+            return true;
+        }
+    }
+    let file_name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    if to_lowercase(&file_name) == ".ds_store" {
+        return true;
+    }
+    false
+}
+
+/// Recursively search `dir` for files whose paths match `keywords`, returning the best candidate.
+///
+/// Ignores build/dependency directories and binary files. Candidates are ranked by:
+/// 1. Path depth (shallower paths preferred)
+/// 2. Exact match of a keyword in the file stem/name
+/// 3. Path length
+pub fn find_file_in_dir(dir: &Path, keywords: &[impl AsRef<str>]) -> Option<PathBuf> {
+    if keywords.is_empty() {
+        return None;
+    }
+
+    let kw_lowers: Vec<String> = keywords.iter().map(to_lowercase).collect();
+    let mut candidates = Vec::new();
+
+    fn walk(
+        current: &Path,
+        keywords: &[impl AsRef<str>],
+        kw_lowers: &[String],
+        depth: usize,
+        candidates: &mut Vec<PathBuf>,
+    ) {
+        if depth > 6 {
+            return;
+        }
+
+        let entries = match fs::read_dir(current) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+            let name_lower = to_lowercase(&name_str);
+
+            if path.is_dir() {
+                if IGNORED_DIRS.contains(&name_lower.as_str())
+                    && !kw_lowers.iter().any(|k| k == &name_lower)
+                {
+                    continue;
+                }
+                walk(&path, keywords, kw_lowers, depth + 1, candidates);
+            } else if path.is_file() {
+                if is_binary_file(&path) {
+                    continue;
+                }
+                if matches_keywords(&path, keywords) {
+                    candidates.push(path);
+                }
+            }
+        }
+    }
+
+    walk(dir, keywords, &kw_lowers, 0, &mut candidates);
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // Rank candidates:
+    // 1. Shallower depth (fewer path components)
+    // 2. Direct match between keyword and file stem
+    // 3. Shorter path string length
+    candidates.sort_by(|a, b| {
+        let depth_a = a.components().count();
+        let depth_b = b.components().count();
+
+        if depth_a != depth_b {
+            return depth_a.cmp(&depth_b);
+        }
+
+        let stem_a = a.file_stem().map(|s| to_lowercase(s.to_string_lossy())).unwrap_or_default();
+        let stem_b = b.file_stem().map(|s| to_lowercase(s.to_string_lossy())).unwrap_or_default();
+
+        let exact_a = kw_lowers.iter().any(|k| k == &stem_a);
+        let exact_b = kw_lowers.iter().any(|k| k == &stem_b);
+
+        if exact_a != exact_b {
+            return exact_b.cmp(&exact_a);
+        }
+
+        a.to_string_lossy().len().cmp(&b.to_string_lossy().len())
+    });
+
+    Some(candidates.remove(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +439,24 @@ mod tests {
         assert!(matches_keywords(path, &["CONFIG", "TMUX.CONF"]));
         assert!(!matches_keywords(path, &["tmux", "config"]));
     }
+
+    #[test]
+    fn test_find_file_in_dir() {
+        let cwd = current_dir().expect("current directory must exist");
+        let found = find_file_in_dir(&cwd, &["src", "main.rs"]);
+        assert!(found.is_some());
+        assert!(found.expect("file exists").to_string_lossy().contains("main.rs"));
+    }
+
+    #[test]
+    fn test_is_binary_file() {
+        assert!(is_binary_file(Path::new("image.png")));
+        assert!(is_binary_file(Path::new("lib.so")));
+        assert!(is_binary_file(Path::new(".DS_Store")));
+        assert!(!is_binary_file(Path::new("README.md")));
+        assert!(!is_binary_file(Path::new("main.rs")));
+    }
 }
+
+
 
