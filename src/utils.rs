@@ -258,3 +258,60 @@ pub fn to_lowercase(s: impl AsRef<str>) -> String {
         s.to_lowercase()
     }
 }
+
+/// Checks whether all query `keywords` appear sequentially within `path` (case-insensitively).
+///
+/// Analogous to zoxide's path matching logic, each keyword must match a substring of `path`
+/// at or after the previous keyword's match location.
+pub fn matches_keywords(path: &Path, keywords: &[impl AsRef<str>]) -> bool {
+    if keywords.is_empty() {
+        return true;
+    }
+
+    let path_str = to_lowercase(path.to_string_lossy());
+    let mut search_idx = 0;
+
+    for kw in keywords {
+        let kw_lower = to_lowercase(kw);
+        if kw_lower.is_empty() {
+            continue;
+        }
+
+        match path_str[search_idx..].find(&kw_lower) {
+            Some(rel_idx) => {
+                search_idx += rel_idx + kw_lower.len();
+            }
+            None => return false,
+        }
+    }
+
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_matches_keywords_empty() {
+        let empty_kw: Vec<&str> = vec![];
+        assert!(matches_keywords(Path::new("/home/user/test"), &empty_kw));
+    }
+
+    #[test]
+    fn test_matches_keywords_single() {
+        let path = Path::new("/home/user/.config/tmux/tmux.conf");
+        assert!(matches_keywords(path, &["tmux"]));
+        assert!(matches_keywords(path, &["TMUX"]));
+        assert!(!matches_keywords(path, &["zsh"]));
+    }
+
+    #[test]
+    fn test_matches_keywords_sequential_multi() {
+        let path = Path::new("/home/user/.config/tmux/tmux.conf");
+        assert!(matches_keywords(path, &["config", "tmux"]));
+        assert!(matches_keywords(path, &["CONFIG", "TMUX.CONF"]));
+        assert!(!matches_keywords(path, &["tmux", "config"]));
+    }
+}
+

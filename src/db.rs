@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use postcard::{from_bytes, to_allocvec};
 use serde::{Deserialize, Serialize};
 
@@ -65,8 +65,10 @@ impl Database {
     }
 
     pub fn load(&mut self) -> Result<Self> {
-        let file_bytes = fs::read(&self.path)?;
-        let decoded_db: Database = from_bytes(&file_bytes)?;
+        let file_bytes = fs::read(&self.path)
+            .with_context(|| format!("while attempting to read database from {}", self.path.display()))?;
+        let decoded_db: Database = from_bytes(&file_bytes)
+            .context("while attempting to decode database bytes")?;
         Ok(decoded_db)
     }
 
@@ -76,36 +78,105 @@ impl Database {
     }
 
     pub fn save(&mut self) -> Result<()> {
-        let encoded_bytes = to_allocvec(self)?;
-        fs::write(&self.path, encoded_bytes)?;
+        let encoded_bytes = to_allocvec(self)
+            .context("while attempting to encode database")?;
+        fs::write(&self.path, encoded_bytes)
+            .with_context(|| format!("while attempting to write database to {}", self.path.display()))?;
         Ok(())
     }
 
-    pub fn query(&mut self, file: &str) -> Result<&Record> {
-        let now = utils::current_time()?;
+    pub fn query(&mut self, keywords: &[impl AsRef<str>]) -> Result<&Record> {
+        let now = utils::current_time().context("while attempting to get current time")?;
         let best_idx = self
             .records
             .iter()
             .enumerate()
-            .filter(|(_, record)| record.path.to_string_lossy().contains(file))
+            .filter(|(_, record)| utils::matches_keywords(&record.path, keywords))
             .max_by(|(_, a), (_, b)| a.score(now).total_cmp(&b.score(now)))
             .map(|(idx, _)| idx);
 
         if let Some(idx) = best_idx {
-            self.records[idx].score = self.records[idx].score * 2.0;
+            self.records[idx].score *= 2.0;
             self.records[idx].last_accessed = now;
-            self.save()?;
+            self.save().context("while attempting to save database after query update")?;
             Ok(&self.records[idx])
         } else {
-            let rec = Record::new(canonicalize(file)?);
-            self.records.push(rec);
-            self.records.iter_mut().last().unwrap().last_accessed = now;
-            self.save()?;
+            // If single keyword and points to a file on disk, add it to database history
+            if keywords.len() == 1 {
+                if let Ok(canon_path) = canonicalize(keywords[0].as_ref()) {
+                    let rec = Record::new(canon_path);
+                    self.records.push(rec);
+                    let last_idx = self.records.len() - 1;
+                    self.records[last_idx].last_accessed = now;
+                    self.save().context("while attempting to save database after adding path")?;
+                }
+            }
 
-            Err(anyhow!("Did not find record"))
+            Err(anyhow!("Did not find record matching query"))
         }
     }
 }
 
 pub type Epoch = u64;
 pub type Rank = f64;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_db_query_multi_keyword_matching() {
+        let mut db = Database::new(PathBuf::from("/tmp/dummy_db"));
+        db.records.push(Record {
+            path: PathBuf::from("/home/user/.config/nvim/init.lua"),
+            score: 1.0,
+            last_accessed: 100,
+        });
+        db.records.push(Record {
+            path: PathBuf::from("/home/user/.config/tmux/tmux.conf"),
+            score: 2.0,
+            last_accessed: 100,
+        });
+        db.records.push(Record {
+            path: PathBuf::from("/home/user/tmux/notes.txt"),
+            score: 5.0,
+            last_accessed: 100,
+        });
+
+        // Querying ["config", "tmux"] should match /home/user/.config/tmux/tmux.conf
+        // even though notes.txt has a higher raw score, because notes.txt does not contain "config".
+        let matched = db.query(&["config", "tmux"]).expect("should match tmux.conf");
+        assert_eq!(matched.path, PathBuf::from("/home/user/.config/tmux/tmux.conf"));
+    }
+
+    #[test]
+    fn test_db_query_frecency_ranking() {
+        let mut db = Database::new(PathBuf::from("/tmp/dummy_db"));
+        db.records.push(Record {
+            path: PathBuf::from("/home/user/projects/tmux-plugin/tmux.conf"),
+            score: 1.0,
+            last_accessed: 100,
+        });
+        db.records.push(Record {
+            path: PathBuf::from("/home/user/.config/tmux/tmux.conf"),
+            score: 10.0,
+            last_accessed: 100,
+        });
+
+        let matched = db.query(&["tmux", "conf"]).expect("should match higher score tmux.conf");
+        assert_eq!(matched.path, PathBuf::from("/home/user/.config/tmux/tmux.conf"));
+    }
+
+    #[test]
+    fn test_db_query_no_match() {
+        let mut db = Database::new(PathBuf::from("/tmp/dummy_db"));
+        db.records.push(Record {
+            path: PathBuf::from("/home/user/.config/nvim/init.lua"),
+            score: 1.0,
+            last_accessed: 100,
+        });
+
+        assert!(db.query(&["nonexistent", "path"]).is_err());
+    }
+}
+

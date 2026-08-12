@@ -2,26 +2,16 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use hopr::db::Database;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    file: String,
-}
-
-fn open_in_nvim(selected: String) {
-    let status = Command::new("nvim")
-        .arg(selected)
-        .status()
-        .expect("Failed to launch nvim");
-
-    if !status.success() {
-        eprintln!("nvim exited with error");
-        std::process::exit(1);
-    }
+    /// Search terms or command (e.g., `list` or `config tmux`)
+    #[arg(required = true)]
+    keywords: Vec<String>,
 }
 
 fn open_in_nvim_unix(selected: String, dir: Option<&Path>) {
@@ -32,43 +22,32 @@ fn open_in_nvim_unix(selected: String, dir: Option<&Path>) {
     }
 }
 
-fn fuzzy_select(content: String, search: &str) -> Option<String> {
-    for line in content.split("\n") {
-        if line.contains(search) {
-            return Some(line.to_string());
-        }
-    }
-    None
-}
-
 fn main() -> Result<()> {
     let args = Cli::parse();
-    let history = format!("{}/.hopr_history", std::env::var("HOME").unwrap());
+    let home = std::env::var("HOME").context("while attempting to read HOME environment variable")?;
+    let history = format!("{}/.hopr_history", home);
     let mut database = Database::new(history.into());
     let mut database = match database.load() {
         Ok(v) => v,
         Err(_) => database,
     };
 
-    if args.file == "list" {
+    if args.keywords.len() == 1 && args.keywords[0] == "list" {
         println!("{}", database);
         return Ok(());
     }
 
-    println!("{:?}", database);
-    let selected = database.query(&args.file);
-    println!("{:?}", selected);
+    let selected = database.query(&args.keywords);
 
-    let mut dir: Option<&Path> = Option::None;
-    let to_open = match selected {
-        Ok(v) => {
-            let path = v.path.to_string_lossy();
-            dir = v.path.parent();
-            path
+    let (to_open, dir) = match selected {
+        Ok(v) => (v.path.to_string_lossy().to_string(), v.path.parent()),
+        Err(err) => {
+            eprintln!("Error matching route: {}", err);
+            std::process::exit(1);
         }
-        Err(_) => args.file.into(),
     };
 
-    open_in_nvim_unix(to_open.to_string(), dir);
+    open_in_nvim_unix(to_open, dir);
     Ok(())
 }
+
