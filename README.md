@@ -1,7 +1,14 @@
 # hopr
 
+[![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Neovim](https://img.shields.io/badge/Neovim-0.8%2B-green?style=flat-square&logo=neovim&logoColor=white)](https://neovim.io)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen?style=flat-square)](https://github.com/shadowmkj/hopr)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue?style=flat-square)](https://github.com/shadowmkj/hopr)
+
 > **A lightning-fast, frecency-based file hopper for Neovim.**  
 > Jump straight into your most relevant files across projects with partial keywords, powered by a [zoxide](https://github.com/ajeetdsouza/zoxide)-inspired frecency engine.
+
 
 ---
 
