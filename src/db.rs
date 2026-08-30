@@ -65,10 +65,14 @@ impl Database {
     }
 
     pub fn load(&mut self) -> Result<Self> {
-        let file_bytes = fs::read(&self.path)
-            .with_context(|| format!("while attempting to read database from {}", self.path.display()))?;
-        let decoded_db: Database = from_bytes(&file_bytes)
-            .context("while attempting to decode database bytes")?;
+        let file_bytes = fs::read(&self.path).with_context(|| {
+            format!(
+                "while attempting to read database from {}",
+                self.path.display()
+            )
+        })?;
+        let decoded_db: Database =
+            from_bytes(&file_bytes).context("while attempting to decode database bytes")?;
         Ok(decoded_db)
     }
 
@@ -78,10 +82,13 @@ impl Database {
     }
 
     pub fn save(&mut self) -> Result<()> {
-        let encoded_bytes = to_allocvec(self)
-            .context("while attempting to encode database")?;
-        fs::write(&self.path, encoded_bytes)
-            .with_context(|| format!("while attempting to write database to {}", self.path.display()))?;
+        let encoded_bytes = to_allocvec(self).context("while attempting to encode database")?;
+        fs::write(&self.path, encoded_bytes).with_context(|| {
+            format!(
+                "while attempting to write database to {}",
+                self.path.display()
+            )
+        })?;
         Ok(())
     }
 
@@ -100,7 +107,8 @@ impl Database {
                 self.records.len() - 1
             }
         };
-        self.save().context("while attempting to save database after record update")?;
+        self.save()
+            .context("while attempting to save database after record update")?;
         Ok(&self.records[idx])
     }
 
@@ -108,8 +116,16 @@ impl Database {
         let now = utils::current_time().context("while attempting to get current time")?;
 
         // 1. Prioritize direct relative/absolute path match on disk
-        let path_slash = keywords.iter().map(|k| k.as_ref()).collect::<Vec<_>>().join("/");
-        let path_space = keywords.iter().map(|k| k.as_ref()).collect::<Vec<_>>().join(" ");
+        let path_slash = keywords
+            .iter()
+            .map(|k| k.as_ref())
+            .collect::<Vec<_>>()
+            .join("/");
+        let path_space = keywords
+            .iter()
+            .map(|k| k.as_ref())
+            .collect::<Vec<_>>()
+            .join(" ");
 
         let direct_path = canonicalize(&path_slash)
             .ok()
@@ -128,14 +144,12 @@ impl Database {
         }
 
         // 2. Prioritize matching file in the current working directory or its subdirectories
-        if let Ok(cwd) = utils::current_dir() {
-            if let Some(local_path) = utils::find_file_in_dir(&cwd, keywords) {
-                if let Ok(canon_local) = canonicalize(local_path) {
-                    if canon_local.is_file() {
-                        return self.get_or_insert_record(canon_local, now);
-                    }
-                }
-            }
+        if let Ok(cwd) = utils::current_dir()
+            && let Some(local_path) = utils::find_file_in_dir(&cwd, keywords)
+            && let Ok(canon_local) = canonicalize(local_path)
+            && canon_local.is_file()
+        {
+            return self.get_or_insert_record(canon_local, now);
         }
 
         // 3. Fallback to global history records by frecency score (ignoring binary files)
@@ -143,14 +157,18 @@ impl Database {
             .records
             .iter()
             .enumerate()
-            .filter(|(_, record)| !utils::is_binary_file(&record.path) && utils::matches_keywords(&record.path, keywords))
+            .filter(|(_, record)| {
+                !utils::is_binary_file(&record.path)
+                    && utils::matches_keywords(&record.path, keywords)
+            })
             .max_by(|(_, a), (_, b)| a.score(now).total_cmp(&b.score(now)))
             .map(|(idx, _)| idx);
 
         if let Some(idx) = best_idx {
             self.records[idx].score *= 2.0;
             self.records[idx].last_accessed = now;
-            self.save().context("while attempting to save database after query update")?;
+            self.save()
+                .context("while attempting to save database after query update")?;
             Ok(&self.records[idx])
         } else {
             Err(anyhow!("Did not find record matching query"))
@@ -186,8 +204,13 @@ mod tests {
 
         // Querying ["config", "tmux"] should match /home/user/.config/tmux/tmux.conf
         // even though notes.txt has a higher raw score, because notes.txt does not contain "config".
-        let matched = db.query(&["config", "tmux"]).expect("should match tmux.conf");
-        assert_eq!(matched.path, PathBuf::from("/home/user/.config/tmux/tmux.conf"));
+        let matched = db
+            .query(&["config", "tmux"])
+            .expect("should match tmux.conf");
+        assert_eq!(
+            matched.path,
+            PathBuf::from("/home/user/.config/tmux/tmux.conf")
+        );
     }
 
     #[test]
@@ -204,8 +227,13 @@ mod tests {
             last_accessed: 100,
         });
 
-        let matched = db.query(&["tmux", "conf"]).expect("should match higher score tmux.conf");
-        assert_eq!(matched.path, PathBuf::from("/home/user/.config/tmux/tmux.conf"));
+        let matched = db
+            .query(&["tmux", "conf"])
+            .expect("should match higher score tmux.conf");
+        assert_eq!(
+            matched.path,
+            PathBuf::from("/home/user/.config/tmux/tmux.conf")
+        );
     }
 
     #[test]
@@ -224,7 +252,9 @@ mod tests {
     fn test_db_query_fallback_file_on_disk() {
         let mut db = Database::new(PathBuf::from("/tmp/dummy_db_fallback"));
         // DB starts empty, but "src/main.rs" exists on disk
-        let matched = db.query(&["src", "main.rs"]).expect("should locate src/main.rs on disk");
+        let matched = db
+            .query(&["src", "main.rs"])
+            .expect("should locate src/main.rs on disk");
         assert!(matched.path.to_string_lossy().contains("src/main.rs"));
         assert_eq!(db.records.len(), 1);
     }
@@ -240,10 +270,9 @@ mod tests {
         });
 
         // Querying ["src", "main.rs"] from current repo should match current repo's src/main.rs
-        let matched = db.query(&["src", "main.rs"]).expect("should locate current dir src/main.rs");
+        let matched = db
+            .query(&["src", "main.rs"])
+            .expect("should locate current dir src/main.rs");
         assert!(matched.path.to_string_lossy().contains("hopr/src/main.rs"));
     }
 }
-
-
-

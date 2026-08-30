@@ -24,7 +24,8 @@ fn open_in_nvim_unix(selected: String, dir: Option<&Path>) {
 
 fn main() -> Result<()> {
     let args = Cli::parse();
-    let home = std::env::var("HOME").context("while attempting to read HOME environment variable")?;
+    let home =
+        std::env::var("HOME").context("while attempting to read HOME environment variable")?;
     let history = format!("{}/.hopr_history", home);
     let mut database = Database::new(history.into());
     let mut database = match database.load() {
@@ -40,7 +41,10 @@ fn main() -> Result<()> {
     let selected = database.query(&args.keywords);
 
     let (to_open, dir) = match selected {
-        Ok(v) => (v.path.to_string_lossy().to_string(), v.path.parent().map(|p| p.to_path_buf())),
+        Ok(v) => (
+            v.path.to_string_lossy().to_string(),
+            v.path.parent().map(|p| p.to_path_buf()),
+        ),
         Err(_) => {
             let combined = args.keywords.join("/");
             let path = std::path::PathBuf::from(&combined);
@@ -52,4 +56,3 @@ fn main() -> Result<()> {
     open_in_nvim_unix(to_open, dir.as_deref());
     Ok(())
 }
-

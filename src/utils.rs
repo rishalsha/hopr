@@ -319,7 +319,10 @@ pub fn is_binary_file(path: &Path) -> bool {
             return true;
         }
     }
-    let file_name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
     if to_lowercase(&file_name) == ".ds_store" {
         return true;
     }
@@ -398,8 +401,14 @@ pub fn find_file_in_dir(dir: &Path, keywords: &[impl AsRef<str>]) -> Option<Path
             return depth_a.cmp(&depth_b);
         }
 
-        let stem_a = a.file_stem().map(|s| to_lowercase(s.to_string_lossy())).unwrap_or_default();
-        let stem_b = b.file_stem().map(|s| to_lowercase(s.to_string_lossy())).unwrap_or_default();
+        let stem_a = a
+            .file_stem()
+            .map(|s| to_lowercase(s.to_string_lossy()))
+            .unwrap_or_default();
+        let stem_b = b
+            .file_stem()
+            .map(|s| to_lowercase(s.to_string_lossy()))
+            .unwrap_or_default();
 
         let exact_a = kw_lowers.iter().any(|k| k == &stem_a);
         let exact_b = kw_lowers.iter().any(|k| k == &stem_b);
@@ -445,7 +454,12 @@ mod tests {
         let cwd = current_dir().expect("current directory must exist");
         let found = find_file_in_dir(&cwd, &["src", "main.rs"]);
         assert!(found.is_some());
-        assert!(found.expect("file exists").to_string_lossy().contains("main.rs"));
+        assert!(
+            found
+                .expect("file exists")
+                .to_string_lossy()
+                .contains("main.rs")
+        );
     }
 
     #[test]
@@ -457,6 +471,3 @@ mod tests {
         assert!(!is_binary_file(Path::new("main.rs")));
     }
 }
-
-
-
