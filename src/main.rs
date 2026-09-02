@@ -1,10 +1,10 @@
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use hopr::db::Database;
+use hopr::utils;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -14,20 +14,53 @@ struct Cli {
     keywords: Vec<String>,
 }
 
-fn open_in_nvim_unix(selected: String, dir: Option<&Path>) {
+fn get_editor() -> String {
+    std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "nvim".to_string())
+}
+
+#[cfg(unix)]
+fn open_in_editor(editor: &str, selected: &str, dir: Option<&Path>) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = Command::new(editor);
+    cmd.arg(selected);
     if let Some(d) = dir {
-        let _ = Command::new("nvim").arg(selected).current_dir(d).exec();
-    } else {
-        let _ = Command::new("nvim").arg(selected).exec();
+        cmd.current_dir(d);
     }
+    let err = cmd.exec();
+    Err(anyhow::Error::from(err)
+        .context(format!("while attempting to execute editor '{}'", editor)))
+}
+
+#[cfg(windows)]
+fn open_in_editor(editor: &str, selected: &str, dir: Option<&Path>) -> Result<()> {
+    let mut cmd = Command::new(editor);
+    cmd.arg(selected);
+    if let Some(d) = dir {
+        cmd.current_dir(d);
+    }
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("while attempting to spawn editor '{}'", editor))?;
+    let status = child
+        .wait()
+        .with_context(|| format!("while attempting to wait for editor '{}'", editor))?;
+    if !status.success() {
+        anyhow::bail!(
+            "editor '{}' exited with non-zero status: {:?}",
+            editor,
+            status.code()
+        );
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
     let args = Cli::parse();
-    let home =
-        std::env::var("HOME").context("while attempting to read HOME environment variable")?;
-    let history = format!("{}/.hopr_history", home);
-    let mut database = Database::new(history.into());
+    let history_path =
+        utils::get_history_path().context("while attempting to resolve history database path")?;
+    let mut database = Database::new(history_path);
     let mut database = match database.load() {
         Ok(v) => v,
         Err(_) => database,
@@ -53,6 +86,8 @@ fn main() -> Result<()> {
         }
     };
 
-    open_in_nvim_unix(to_open, dir.as_deref());
+    let editor = get_editor();
+    open_in_editor(&editor, &to_open, dir.as_deref())
+        .context("while attempting to open target in editor")?;
     Ok(())
 }

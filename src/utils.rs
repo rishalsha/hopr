@@ -134,6 +134,35 @@ pub fn current_time() -> Result<Epoch> {
     Ok(current_time)
 }
 
+/// Resolve the user's home directory across Unix and Windows platforms.
+#[cfg(unix)]
+pub fn home_dir() -> Result<PathBuf> {
+    env::var("HOME")
+        .map(PathBuf::from)
+        .context("while attempting to read HOME environment variable")
+}
+
+/// Resolve the user's home directory across Unix and Windows platforms.
+#[cfg(windows)]
+pub fn home_dir() -> Result<PathBuf> {
+    if let Ok(userprofile) = env::var("USERPROFILE") {
+        return Ok(PathBuf::from(userprofile));
+    }
+    if let (Ok(drive), Ok(path)) = (env::var("HOMEDRIVE"), env::var("HOMEPATH")) {
+        return Ok(PathBuf::from(format!("{}{}", drive, path)));
+    }
+    if let Ok(home) = env::var("HOME") {
+        return Ok(PathBuf::from(home));
+    }
+    bail!("could not determine home directory: neither USERPROFILE nor HOMEDRIVE/HOMEPATH is set")
+}
+
+/// Returns the default history database file path (~/.hopr_history).
+pub fn get_history_path() -> Result<PathBuf> {
+    let home = home_dir().context("while attempting to determine user home directory")?;
+    Ok(home.join(".hopr_history"))
+}
+
 pub fn path_to_str(path: &impl AsRef<Path>) -> Result<&str> {
     let path = path.as_ref();
     path.to_str()
@@ -469,5 +498,27 @@ mod tests {
         assert!(is_binary_file(Path::new(".DS_Store")));
         assert!(!is_binary_file(Path::new("README.md")));
         assert!(!is_binary_file(Path::new("main.rs")));
+    }
+
+    #[test]
+    fn test_home_dir_resolution() {
+        let home = home_dir();
+        assert!(
+            home.is_ok(),
+            "home_dir should resolve successfully in test environment"
+        );
+        let home_path = home.expect("home_dir returned Ok");
+        assert!(!home_path.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn test_get_history_path() {
+        let history_path = get_history_path();
+        assert!(
+            history_path.is_ok(),
+            "get_history_path should resolve successfully"
+        );
+        let path = history_path.expect("get_history_path returned Ok");
+        assert!(path.ends_with(".hopr_history"));
     }
 }
