@@ -1,5 +1,7 @@
 # hopr
 
+**Current release: 1.1.0**
+
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Neovim](https://img.shields.io/badge/Neovim-0.8%2B-green?style=flat-square&logo=neovim&logoColor=white)](https://neovim.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
@@ -32,6 +34,7 @@ While tools like `zoxide` or `autojump` make navigating directories effortless, 
 - 🛡️ **Binary File Exclusion:** Automatically filters out non-text binary files (`.png`, `.so`, `.wasm`, `.sqlite`, `.DS_Store`, etc.) from history queries so your editor never opens corrupt binary blobs.
 - 📁 **Context-Aware Directory Switching:** Launches `nvim` with the working directory set to the target file's parent folder, making your LSP and file trees immediately relevant.
 - 💾 **Compact Binary Storage:** Uses [postcard](https://github.com/jamesmunns/postcard) serialization for microsecond database reads and writes.
+- 🔄 **Neovim History Import:** Imports existing text files from Neovim's ShaDa history, so files opened with `nvim .` can later be found with `hopr <keywords>`.
 - 🚀 **Zero Process Overhead:** Directly invokes `execvp` on Unix to replace the CLI process with `nvim` instead of spawning extra wrapper subshells.
 
 ---
@@ -118,6 +121,18 @@ To view all tracked files and their current raw frecency scores:
 hopr list
 ```
 
+Files opened through Neovim are imported automatically from Neovim's ShaDa history
+before each query. This means the following workflow works:
+
+```sh
+z project
+nvim .
+# Select and edit text.txt, then exit Neovim
+hopr text
+```
+
+Only existing, non-binary files are imported.
+
 Example output:
 ```text
 "/Users/username/.config/tmux/tmux.conf": 128
@@ -177,7 +192,9 @@ When you run `hopr <keywords...>`, the query passes through a strict two-stage p
 
 ## The Frecency Scoring Model
 
-`hopr` calculates file importance using **frecency** ($Score \times TimeMultiplier$):
+`hopr` calculates file importance using **frecency** ($Score \times TimeMultiplier$). Like
+zoxide, a query always opens the single highest-ranked match automatically; add more
+terms to narrow the result when several files are similar:
 
 $$\text{Effective Score} = \text{Raw Score} \times \text{Recency Multiplier}$$
 

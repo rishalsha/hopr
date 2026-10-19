@@ -20,6 +20,31 @@ fn get_editor() -> String {
         .unwrap_or_else(|_| "nvim".to_string())
 }
 
+fn nvim_oldfiles() -> Vec<std::path::PathBuf> {
+    let output = match Command::new("nvim")
+        .args([
+            "--headless",
+            "-u",
+            "NONE",
+            "-c",
+            "lua for _, path in ipairs(vim.v.oldfiles) do print(path) end",
+            "-c",
+            "qa!",
+        ])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .collect()
+}
+
 #[cfg(unix)]
 fn open_in_editor(editor: &str, selected: &str, dir: Option<&Path>) -> Result<()> {
     use std::os::unix::process::CommandExt;
@@ -60,11 +85,16 @@ fn main() -> Result<()> {
     let args = Cli::parse();
     let history_path =
         utils::get_history_path().context("while attempting to resolve history database path")?;
-    let mut database = Database::new(history_path);
-    let mut database = match database.load() {
-        Ok(v) => v,
-        Err(_) => database,
+    let mut database = Database::new(history_path.clone());
+    let mut database = if history_path.exists() {
+        database
+            .load()
+            .context("while attempting to load history database")?
+    } else {
+        database
     };
+
+    database.import_paths(nvim_oldfiles())?;
 
     if args.keywords.len() == 1 && args.keywords[0] == "list" {
         println!("{}", database);
