@@ -71,8 +71,9 @@ impl Database {
                 self.path.display()
             )
         })?;
-        let decoded_db: Database =
+        let mut decoded_db: Database =
             from_bytes(&file_bytes).context("while attempting to decode database bytes")?;
+        decoded_db.path = self.path.clone();
         Ok(decoded_db)
     }
 
@@ -81,9 +82,34 @@ impl Database {
         self.records.push(file);
     }
 
+    pub fn import_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) -> Result<()> {
+        let mut imported = false;
+
+        for path in paths {
+            let Ok(path) = canonicalize(path) else {
+                continue;
+            };
+            if !path.is_file()
+                || utils::is_binary_file(&path)
+                || self.records.iter().any(|record| record.path == path)
+            {
+                continue;
+            }
+
+            self.add(path);
+            imported = true;
+        }
+
+        if imported {
+            self.save()
+                .context("while attempting to save imported editor history")?;
+        }
+        Ok(())
+    }
+
     pub fn save(&mut self) -> Result<()> {
         let encoded_bytes = to_allocvec(self).context("while attempting to encode database")?;
-        fs::write(&self.path, encoded_bytes).with_context(|| {
+        utils::write(&self.path, encoded_bytes).with_context(|| {
             format!(
                 "while attempting to write database to {}",
                 self.path.display()
@@ -274,5 +300,24 @@ mod tests {
             .query(&["src", "main.rs"])
             .expect("should locate current dir src/main.rs");
         assert!(matched.path.to_string_lossy().contains("hopr/src/main.rs"));
+    }
+
+    #[test]
+    fn test_load_uses_current_database_path() {
+        let source_path = std::env::temp_dir().join("hopr-test-history-source");
+        let target_path = std::env::temp_dir().join("hopr-test-history-target");
+        let mut source = Database::new(source_path.clone());
+        source
+            .records
+            .push(Record::new(PathBuf::from("/tmp/file.txt")));
+        source.save().expect("source database should save");
+        fs::copy(&source_path, &target_path).expect("test database should be copied");
+
+        let mut target = Database::new(target_path.clone());
+        let loaded = target.load().expect("database should load");
+
+        assert_eq!(loaded.path, target_path);
+        let _ = fs::remove_file(source_path);
+        let _ = fs::remove_file(target_path);
     }
 }
